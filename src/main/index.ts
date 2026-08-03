@@ -1,9 +1,10 @@
 import { app, BrowserWindow, powerMonitor } from 'electron'
+import fsSync from 'node:fs'
 import { createTray, rebuildMenu, setHotkeyFailureBadge } from './tray'
 import { registerHotkeys, unregisterAllHotkeys } from './hotkey'
 import { registerIpcHandlers } from './ipc'
 import { getSettings } from './store'
-import { prewarmOverlayWindows } from './windows/overlay'
+import { prewarmOverlayWindows, keepOverlaysWarm } from './windows/overlay'
 import { prewarmEditorWindow, destroyEditorWindow } from './windows/editor'
 import {
   createToolbarWindow,
@@ -15,12 +16,42 @@ import { cleanupTempCaptures } from './capture'
 import { prewarmPowerShell, destroyPowerShell } from './capture/win'
 import { applyAutoStart } from './autostart'
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 
 // Single instance
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 }
+
+// v0.9.6: 일부 PC(구형 GPU 드라이버, 원격데스크톱 등)에서 투명 오버레이 창이
+// 검게 렌더링되는 문제 자동 복구. GPU 프로세스가 반복 크래시하면 플래그를
+// 남기고, 다음 실행부터 하드웨어 가속을 꺼서 소프트웨어 합성으로 동작
+// (투명 창이 정상 표시됨).
+const hwAccelFlagPath = path.join(app.getPath('userData'), 'disable-hw-accel')
+try {
+  if (fsSync.existsSync(hwAccelFlagPath)) {
+    app.disableHardwareAcceleration()
+    console.log('[main] GPU 문제 이력 감지 → 하드웨어 가속 비활성화 모드로 실행')
+  }
+} catch {
+  /* ignore */
+}
+let gpuCrashCount = 0
+app.on('child-process-gone', (_e, details) => {
+  if (details.type === 'GPU' && details.reason !== 'clean-exit') {
+    gpuCrashCount++
+    console.warn('[main] GPU 프로세스 종료 감지:', details.reason, `(${gpuCrashCount}회)`)
+    if (gpuCrashCount >= 2) {
+      try {
+        fsSync.writeFileSync(hwAccelFlagPath, new Date().toISOString())
+        console.warn('[main] 다음 실행부터 하드웨어 가속 끔 (검은 화면 문제 자동 복구)')
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+})
 
 // 이미 앱이 실행 중인 상태에서 데스크톱 아이콘이 또 클릭되면 → 툴바 팝업
 app.on('second-instance', () => {
@@ -86,6 +117,19 @@ app.whenReady().then(async () => {
 
   // v0.5.0: 자동 업데이트 (백그라운드 다운로드 + 다음 종료 시 적용)
   setupAutoUpdater()
+
+  // v0.9.6: 상시 대기 모드 — 30분마다 예열 상태 점검.
+  // 오래 방치하면 OS가 프로세스/창을 정리해 첫 캡처가 느려지는 문제 예방:
+  // 깨진 오버레이 창 재생성, 편집기 창 재예열, (Win) PowerShell 세션 유지.
+  setInterval(() => {
+    try {
+      keepOverlaysWarm()
+      prewarmEditorWindow()
+      if (process.platform === 'win32') prewarmPowerShell()
+    } catch (e) {
+      console.warn('[main] standby 점검 실패:', e)
+    }
+  }, 30 * 60 * 1000)
 
   // v0.6.2: 사용자 설정에 따라 OS 로그인 자동 시작 반영
   applyAutoStart(getSettings().autoStart)

@@ -268,6 +268,19 @@ async function waitForReady(entry: OverlayEntry, timeoutMs = 2000): Promise<void
   })
 }
 
+/**
+ * v0.9.6: 상시 대기 점검용 — 캡처 세션이 없을 때 깨진/누락 오버레이 창을 재정비.
+ * 오래 방치 후 첫 캡처가 느리거나 무반응인 문제 예방 (30분 주기 호출).
+ */
+export function keepOverlaysWarm(): void {
+  if (isOpen) return
+  try {
+    ensureHealthyEntries()
+  } catch (e) {
+    console.warn('[overlay] keepOverlaysWarm 실패:', e)
+  }
+}
+
 /** 단축키 진입점: 라이브 화면 위에 투명 오버레이 즉시 표시. */
 export async function openRegionOverlay(): Promise<void> {
   // v0.7.5: 깨진 entries 정리 + 디스플레이 변경 자동 반영
