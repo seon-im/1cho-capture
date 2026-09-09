@@ -14,7 +14,8 @@ declare global {
 
 export function Editor(): JSX.Element {
   const [img, setImg] = useState<HTMLImageElement | null>(null)
-  const [mosaicImg, setMosaicImg] = useState<HTMLCanvasElement | null>(null)
+  // v0.9.7: 모자이크 픽셀 크기를 굵기 슬라이더와 연동 — 크기별 캔버스 캐시
+  const [mosaicCache, setMosaicCache] = useState<Map<number, HTMLCanvasElement>>(new Map())
   const [shapes, setShapes] = useState<Shape[]>([])
   const [redoStack, setRedoStack] = useState<Shape[]>([])
   const [tool, setTool] = useState<Tool>('pen')
@@ -90,7 +91,7 @@ export function Editor(): JSX.Element {
       const image = new Image()
       image.onload = () => {
         setImg(image)
-        setMosaicImg(null) // v0.6.0: 모자이크는 lazy 계산
+        setMosaicCache(new Map()) // v0.6.0: 모자이크는 lazy 계산
         setShapes([])
         setRedoStack([])
         setZoom(null) // v0.7.1: 새 이미지는 자동 fit
@@ -117,15 +118,33 @@ export function Editor(): JSX.Element {
     })
   }, [])
 
-  // v0.6.0: 모자이크 캔버스는 처음 모자이크 툴 선택 시에만 한 번 계산
+  // v0.9.7: 필요한 블록 크기의 모자이크 캔버스를 lazy 생성.
+  // - 이미 그려진 모자이크 도형들의 크기 (도형마다 그린 시점의 굵기 유지)
+  // - 모자이크 툴 선택 중이면 현재 굵기 (드로잉 미리보기용)
   useEffect(() => {
-    if (tool !== 'mosaic' || !img || mosaicImg) return
+    if (!img) return
+    const needed = new Set<number>()
+    for (const s of shapes) {
+      if (s.tool === 'mosaic') needed.add(mosaicBlockSize(s.strokeWidth))
+    }
+    if (drafting?.tool === 'mosaic') needed.add(mosaicBlockSize(drafting.strokeWidth))
+    if (tool === 'mosaic') needed.add(mosaicBlockSize(strokeWidth))
+
+    const missing = [...needed].filter((n) => !mosaicCache.has(n))
+    if (missing.length === 0) return
+
     // 다음 프레임으로 밀어서 UI 스레드 블록 최소화
     const timer = setTimeout(() => {
-      setMosaicImg(makeMosaicCanvas(img, 14))
+      setMosaicCache((prev) => {
+        const next = new Map(prev)
+        for (const n of missing) {
+          if (!next.has(n)) next.set(n, makeMosaicCanvas(img, n))
+        }
+        return next
+      })
     }, 0)
     return () => clearTimeout(timer)
-  }, [tool, img, mosaicImg])
+  }, [tool, img, strokeWidth, shapes, drafting, mosaicCache])
 
   // v0.7.1: 컨테이너 크기만 측정 (Stage viewport = container 전체)
   useEffect(() => {
@@ -557,7 +576,7 @@ export function Editor(): JSX.Element {
         setImg(newImg)
         setShapes([])
         setRedoStack([])
-        setMosaicImg(null)
+        setMosaicCache(new Map())
         setZoom(null) // 새 이미지 자동 fit
         setPendingCrop(null)
         setTool('pen')
@@ -704,10 +723,13 @@ export function Editor(): JSX.Element {
             >
               <KImage image={img} />
             </Layer>
-            {/* Mosaic layer: clipped mosaic canvas shown only under mosaic shapes */}
-            {mosaicImg && mosaicShapes.length > 0 && (
+            {/* Mosaic layer: clipped mosaic canvas shown only under mosaic shapes.
+                v0.9.7: 도형마다 그린 시점의 굵기에 해당하는 블록 크기 캔버스 사용 */}
+            {mosaicShapes.length > 0 && (
               <Layer listening={false}>
                 {mosaicShapes.map((s) => {
+                  const canvas = mosaicCache.get(mosaicBlockSize(s.strokeWidth))
+                  if (!canvas) return null
                   const r = normalize(s)
                   return (
                     <Group
@@ -717,7 +739,7 @@ export function Editor(): JSX.Element {
                       clipWidth={r.width}
                       clipHeight={r.height}
                     >
-                      <KImage image={mosaicImg} />
+                      <KImage image={canvas} />
                     </Group>
                   )
                 })}
@@ -909,6 +931,15 @@ export function Editor(): JSX.Element {
       </div>
     </div>
   )
+}
+
+/**
+ * v0.9.7: 굵기 슬라이더(1~30) → 모자이크 블록 px (4~60).
+ * 4px 단위로 양자화해 슬라이더 드래그 중 캔버스가 과도하게 생성되는 것 방지.
+ * 기본 굵기 4 → 12px (기존 고정값 14와 유사).
+ */
+function mosaicBlockSize(strokeWidth: number): number {
+  return Math.min(60, Math.max(4, Math.round((strokeWidth * 3) / 4) * 4))
 }
 
 function normalize(s: Shape & { tool: 'mosaic' | 'rect' }): {
