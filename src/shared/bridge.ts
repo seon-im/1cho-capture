@@ -6,6 +6,11 @@ export interface OverlayBridge {
       displayId: number
       bounds: { x: number; y: number; width: number; height: number }
       scaleFactor: number
+      /**
+       * v0.9.8: 이 오버레이 창이 OS 화면 캡처에서 제외되는지 (macOS contentProtection).
+       * true 면 배너/좌표 등 UI 를 스냅샷 도착 전에 즉시 표시해도 안전.
+       */
+      uiSafe?: boolean
     }) => void
   ) => void
   /**

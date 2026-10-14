@@ -79,6 +79,18 @@ function buildOverlayWindow(d: Display): OverlayEntry {
   w.setAlwaysOnTop(true, 'screen-saver')
   w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
+  // v0.9.8 (macOS): 오버레이 창을 화면 캡처에서 제외 (NSWindowSharingNone).
+  // → 스냅샷(screencapture)에 오버레이 UI가 절대 안 찍히므로, 안내 배너/좌표를
+  //   스냅샷 도착을 기다리지 않고 즉시 표시 가능 → 단축키 체감 반응 즉각적.
+  // Windows 는 캡처 API(DXGI)에 따라 검은 영역이 생길 수 있어 적용 안 함.
+  if (process.platform === 'darwin') {
+    try {
+      w.setContentProtection(true)
+    } catch (e) {
+      console.warn('[overlay] setContentProtection 실패:', e)
+    }
+  }
+
   const entry: OverlayEntry = { window: w, displayId: d.id, ready: false }
 
   w.webContents.once('did-finish-load', () => {
@@ -215,10 +227,13 @@ function showOverlayEntry(entry: OverlayEntry, display: Display): void {
   }
 
   // 3. init payload 전송 (v0.9.4: 배경은 스냅샷 완료 시 OVERLAY_BACKGROUND 로 늦게 전달)
+  // v0.9.8: uiSafe = 이 창이 화면 캡처에서 제외됨 (macOS contentProtection)
+  //         → renderer 가 배너/좌표 UI 를 즉시 표시해도 스냅샷에 안 찍힘
   entry.window.webContents.send(IPC.OVERLAY_INIT, {
     displayId: entry.displayId,
     bounds: display.bounds,
-    scaleFactor: display.scaleFactor
+    scaleFactor: display.scaleFactor,
+    uiSafe: process.platform === 'darwin'
   })
 
   // 4. show — v0.8.5: focus() 제거. 오버레이가 포커스를 가져가면 다른 앱의

@@ -1,6 +1,6 @@
 {
   "name": "one-second-capture",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "1초캡처 - 빠르고 간단한 크로스플랫폼 스크린 캡처 도구",
   "main": "out/main/index.js",
   "author": "jungi",

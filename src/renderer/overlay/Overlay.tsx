@@ -11,6 +11,8 @@ interface InitData {
   displayId: number
   bounds: { x: number; y: number; width: number; height: number }
   scaleFactor: number
+  /** v0.9.8: 이 창이 화면 캡처에서 제외됨 (macOS) → UI 즉시 표시 가능 */
+  uiSafe?: boolean
 }
 
 interface Point {
@@ -34,10 +36,13 @@ export function Overlay(): JSX.Element {
   // v0.9.4: 배경 준비 여부를 ref 로도 추적 (드래그 시작 시점 판단용)
   const bgReadyRef = useRef(false)
   const dragStartedWithBgRef = useRef(false)
+  // v0.9.8: 캡처 제외 창 여부 (macOS) — true 면 UI 즉시 표시 + 스냅샷 항상 안전
+  const uiSafeRef = useRef(false)
 
   useEffect(() => {
     window.overlay.onInit((data) => {
       setInit(data)
+      uiSafeRef.current = !!data.uiSafe
       setBackgroundUrl(null)
       bgReadyRef.current = false
       dragStartedWithBgRef.current = false
@@ -52,7 +57,8 @@ export function Overlay(): JSX.Element {
     window.overlay.onBackground((data) => {
       // 배경 도착 전에 이미 드래그를 시작했다면 그 스냅샷엔 드래그 UI(dim/테두리)가
       // 찍혀있을 수 있으므로 적용하지 않음 → submit 시 snapshotOk=false 로 라이브 캡처
-      if (draggingRef.current && !dragStartedWithBgRef.current) return
+      // v0.9.8: uiSafe(캡처 제외 창)면 UI 가 스냅샷에 안 찍히므로 항상 안전하게 적용
+      if (draggingRef.current && !dragStartedWithBgRef.current && !uiSafeRef.current) return
       setBackgroundUrl(data.backgroundUrl)
       bgReadyRef.current = true
     })
@@ -66,7 +72,8 @@ export function Overlay(): JSX.Element {
 
   const onMouseDown = (e: React.MouseEvent): void => {
     draggingRef.current = true
-    dragStartedWithBgRef.current = bgReadyRef.current
+    // uiSafe 창은 캡처에서 제외되므로 배경 도착 전 드래그여도 스냅샷이 오염되지 않음
+    dragStartedWithBgRef.current = bgReadyRef.current || uiSafeRef.current
     setStart({ x: e.clientX, y: e.clientY })
     setCurrent({ x: e.clientX, y: e.clientY })
   }
@@ -182,8 +189,9 @@ export function Overlay(): JSX.Element {
       )}
 
       {/* v0.9.4: 좌표 배지/안내 배너는 스냅샷 배경 도착 후에만 표시
-          (도착 전에 표시하면 백그라운드 스냅샷 캡처에 UI가 찍힘) */}
-      {backgroundUrl && !rect && mouse && (
+          (도착 전에 표시하면 백그라운드 스냅샷 캡처에 UI가 찍힘)
+          v0.9.8: uiSafe 창(macOS, 캡처 제외)은 즉시 표시 → 단축키 반응 즉각 체감 */}
+      {(backgroundUrl || init.uiSafe) && !rect && mouse && (
         <div
           className="pointer-events-none"
           style={{
@@ -202,7 +210,7 @@ export function Overlay(): JSX.Element {
         </div>
       )}
 
-      {backgroundUrl && (
+      {(backgroundUrl || init.uiSafe) && (
         <div
           className="pointer-events-none"
           style={{
