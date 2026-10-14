@@ -29,6 +29,19 @@ const snapshots = new Map<number, SnapshotEntry>()
 // 다음 세션에 끼어들지 않도록 세대 번호로 가드
 let snapshotGeneration = 0
 
+// v0.9.9: 오버레이 창의 "화면 캡처 제외" 지원 여부.
+// macOS 는 전부 지원(NSWindowSharingNone), Windows 는 10 2004(빌드 19041)
+// 이상에서만 WDA_EXCLUDEFROMCAPTURE 로 동작 (미만은 검은 박스 폴백이라 제외).
+function winBuildAtLeast(minBuild: number): boolean {
+  try {
+    return Number(os.release().split('.')[2] ?? 0) >= minBuild
+  } catch {
+    return false
+  }
+}
+const CAPTURE_EXCLUSION_SUPPORTED =
+  process.platform === 'darwin' || (process.platform === 'win32' && winBuildAtLeast(19041))
+
 /**
  * v0.3.1 UX 개편: 맥 Cmd+Shift+4 처럼 "라이브 화면" 위에 투명 오버레이만 띄우고,
  * 드래그가 끝나면 오버레이를 숨긴 뒤 해당 영역만 네이티브로 캡처한다.
@@ -79,11 +92,14 @@ function buildOverlayWindow(d: Display): OverlayEntry {
   w.setAlwaysOnTop(true, 'screen-saver')
   w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
-  // v0.9.8 (macOS): 오버레이 창을 화면 캡처에서 제외 (NSWindowSharingNone).
-  // → 스냅샷(screencapture)에 오버레이 UI가 절대 안 찍히므로, 안내 배너/좌표를
-  //   스냅샷 도착을 기다리지 않고 즉시 표시 가능 → 단축키 체감 반응 즉각적.
-  // Windows 는 캡처 API(DXGI)에 따라 검은 영역이 생길 수 있어 적용 안 함.
-  if (process.platform === 'darwin') {
+  // v0.9.8/0.9.9: 오버레이 창을 화면 캡처에서 제외.
+  // - macOS: NSWindowSharingNone — screencapture 가 이 창을 건너뜀
+  // - Windows 10 2004(빌드 19041)+: WDA_EXCLUDEFROMCAPTURE — DXGI 기반
+  //   desktopCapturer 캡처에서 창이 제거되고 뒤 내용이 그대로 보임
+  //   (그 미만 버전은 검은 박스로 찍히는 WDA_MONITOR 폴백이라 적용 안 함)
+  // → 스냅샷에 오버레이 UI가 절대 안 찍히므로, 안내 배너/좌표를 스냅샷 도착을
+  //   기다리지 않고 즉시 표시 가능 → 단축키 체감 반응 즉각적.
+  if (CAPTURE_EXCLUSION_SUPPORTED) {
     try {
       w.setContentProtection(true)
     } catch (e) {
@@ -227,13 +243,13 @@ function showOverlayEntry(entry: OverlayEntry, display: Display): void {
   }
 
   // 3. init payload 전송 (v0.9.4: 배경은 스냅샷 완료 시 OVERLAY_BACKGROUND 로 늦게 전달)
-  // v0.9.8: uiSafe = 이 창이 화면 캡처에서 제외됨 (macOS contentProtection)
+  // v0.9.8/0.9.9: uiSafe = 이 창이 화면 캡처에서 제외됨 (Mac 전부, Win 10 2004+)
   //         → renderer 가 배너/좌표 UI 를 즉시 표시해도 스냅샷에 안 찍힘
   entry.window.webContents.send(IPC.OVERLAY_INIT, {
     displayId: entry.displayId,
     bounds: display.bounds,
     scaleFactor: display.scaleFactor,
-    uiSafe: process.platform === 'darwin'
+    uiSafe: CAPTURE_EXCLUSION_SUPPORTED
   })
 
   // 4. show — v0.8.5: focus() 제거. 오버레이가 포커스를 가져가면 다른 앱의
